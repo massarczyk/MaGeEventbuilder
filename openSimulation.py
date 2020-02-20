@@ -15,6 +15,8 @@ import matplotlib.pyplot as plt
 import itertools
 
 ##########################################################################################################
+# main function
+
 ##########################################################################################################
 def main(argv):
   start_time = time.time()
@@ -33,13 +35,16 @@ def main(argv):
   print ("# Converting file  : {}".format(inFileName))
   print ("# into file        : {}".format(outFileName))
 
+  # read the file and get needed data
   print("# %s sec : start Reading file" % (time.time() - start_time))
   pandas_inputframe = uproot_file(inFileName,args.test) #return a step-wise panda data frame from the file
 
+  # build individual events according to data structure
   print("# %s sec : start Event building" % (time.time() - start_time))  
   pandas_outputframe = event_building(pandas_inputframe,args.test,args.data_type)
 
 
+   # write pandas frame in a hdf 5 file (! outsource to a new function)
   f = h5py.File(outFileName, "w")
   for column in pandas_outputframe:
 
@@ -59,6 +64,14 @@ def main(argv):
 
   
 ########################################################################################################## 
+# this function opens the root file with uproot
+# it transfers the data in a pandas dataframe
+# processes and volumenames are one long string even the events have a lot of steps
+# I split up the string array outside the panda frame as individual array (was the fastest)
+# if additional MaGe values flags are needed/wished remove the items from the ignoreList 
+# (keep the frame as small as possible to speed up)
+# Event data frame is flattened at the end to optimize use of pandas 
+# (fixed structure over flexible vector with length = number of steps)
 ##########################################################################################################  
 def uproot_file(in_file,testmode):
   tt = uproot.open(in_file)["fTree/eventSteps"]
@@ -97,13 +110,13 @@ def uproot_file(in_file,testmode):
   print("... converted to pandas")
   #split the one long byte entry into the individual Processes for each event
   if 'fStepsfProcessName' in dataframe.columns:
-    test = dataframe['fStepsfProcessName'].values
-    dataframe['fStepsfProcessName'] = splitProcesses(test)
+    name_string = dataframe['fStepsfProcessName'].values
+    dataframe['fStepsfProcessName'] = splitProcesses(name_string)
     print("... modified process names")
 
   #split the one long byte entry into the individual DetectorNumbers for each event
-  test = dataframe['fStepsfPhysVolName'].values
-  dataframe['fStepsfPhysVolName'] = splitVolumes(test)
+  name_string = dataframe['fStepsfPhysVolName'].values
+  dataframe['fStepsfPhysVolName'] = splitVolumes(name_string)
   print("... modified volume IDs")
   
 
@@ -178,18 +191,17 @@ def splitVolumes(name):
   return newname
 
 ########################################################################################################## 
+# this function first breaks the individual (known) MaGe Events in to individual steps
+# Steps within one Geant4-Event are time sorted
+# the timesorted array is used to take all the steps in a coincidence window (makeEvents function) 
+# and push them in a smaller panda frame
+# all steps within this smaller frame are sorted by detector
+# then all a sub-sub frame is created only consisting events in a timewindow of one detector 
+# (inner while structure)
+# this sub-sub frame is pushed towards the makeWafevorm function in order to return a waveform
 ##########################################################################################################  
 def event_building(data_frame,testmode,CalOrBkg):
   # as in https://github.com/orgs/legend-exp/teams/simulations-and-analysis/discussions/12?from_comment=12
-  # to be checked 
-  # - unit of decimal_timestamp 
-  # - it the timestamp the time of the trigger or minus the baselineoffset (10us) ?
-  # - do we wanna split the event type 3 (evt_mc) in calibration and background ?
-  # - muveto and muveto_sample ?
-  # - psa_energy == online energy ?
-  # - difference trigno == evtno == daqevtno ?
-  # - unixtime (right now i just use the time is event processed time.time())
-
   
   output_frame = pd.DataFrame(columns=['ch','daqclk','daqevtno','decimal_timestamp','evtno','evttype','inverted','muveto','muveto_sample','psa_energy', 'trigno','unixtime']) 
   if CalOrBkg.find("cal"):
@@ -284,7 +296,7 @@ def makeEvents(stepList,outFrame,COrB):
   
   return Event_frame
 ##########################################################################################################
-def makeWaveform(stepFrame, detectorID, daqclock, ):
+def makeWaveform(stepFrame, daqclock, ):
   
   return 
 
