@@ -1,6 +1,7 @@
 ##########################################################################################################
 #use as 
-#python converter.py [inDir] [inFile] [outDir]
+#python converter.py [inFile] [outDir] -type [type]
+#e.g.  python openSimulation.py test.root . -type cal -t
 ##########################################################################################################
 
 #!/usr/bin/env python
@@ -43,22 +44,9 @@ def main(argv):
   print("# %s sec : start Event building" % (time.time() - start_time))  
   pandas_outputframe = event_building(pandas_inputframe,args.test,args.data_type)
 
-
-   # write pandas frame in a hdf 5 file (! outsource to a new function)
-  f = h5py.File(outFileName, "w")
-  for column in pandas_outputframe:
-
-    if column.find('waveform_lf') > 0:
-      outputname = 'daqdata/waveform_lf/' + column
-    elif column.find('waveform_hf') > 0:
-      outputname = 'daqdata/waveform_hf/' + column
-    else:
-      outputname = 'daqdata/' + column
-    print(column, " ",outputname)
-    f.create_dataset(outputname,data=pandas_outputframe[column].values)
-
-  f.create_dataset('daqdata/index',data=pandas_outputframe.index)
-  f.close() 
+  # write to output file
+  print("# %s sec : write to output file" % (time.time() - start_time))  
+  writeDataToFile(outFileName,pandas_outputframe,args.test)
     
   print("# %s sec :  end" % (time.time() - start_time))  
 
@@ -79,7 +67,7 @@ def uproot_file(in_file,testmode):
   tt_start = 2 #2
   tt_stop =  tt.numentries-2
   if testmode:
-    tt_stop = min(1000,tt.numentries-2)
+    tt_stop = min(18,tt.numentries-2)
 
     
   #empty data frame
@@ -110,12 +98,12 @@ def uproot_file(in_file,testmode):
   print("... converted to pandas")
   #split the one long byte entry into the individual Processes for each event
   if 'fStepsfProcessName' in dataframe.columns:
-    name_string = dataframe['fStepsfProcessName'].values
+    name_string = dataframe['fStepsfProcessName'].to_numpy()
     dataframe['fStepsfProcessName'] = splitProcesses(name_string)
     print("... modified process names")
 
   #split the one long byte entry into the individual DetectorNumbers for each event
-  name_string = dataframe['fStepsfPhysVolName'].values
+  name_string = dataframe['fStepsfPhysVolName'].to_numpy()
   dataframe['fStepsfPhysVolName'] = splitVolumes(name_string)
   print("... modified volume IDs")
   
@@ -143,7 +131,7 @@ def uproot_file(in_file,testmode):
   print("... change data types")
 
    #set the the time to zero (avoids big numbers, not really necessary)
-  dataframe2['fStepsfT'] = dataframe2['fStepsfT'] - min(dataframe2['fStepsfT'].values)
+  dataframe2['fStepsfT'] = dataframe2['fStepsfT'] - min(dataframe2['fStepsfT'].to_numpy())
   
 
 
@@ -202,8 +190,11 @@ def splitVolumes(name):
 ##########################################################################################################  
 def event_building(data_frame,testmode,CalOrBkg):
   # as in https://github.com/orgs/legend-exp/teams/simulations-and-analysis/discussions/12?from_comment=12
-  
-  output_frame = pd.DataFrame(columns=['ch','daqclk','daqevtno','decimal_timestamp','evtno','evttype','inverted','muveto','muveto_sample','psa_energy', 'trigno','unixtime']) 
+   # cant uses slashes, naming != naming in hdf5 file
+  output_frame = pd.DataFrame(columns=['ch','daqclk','daqevtno','decimal_timestamp','evtno','evttype','inverted',
+                                       'muveto','muveto_sample','psa_energy', 'trigno','unixtime',
+                                       'waveform_hf_t0','waveform_hf_dt','waveform_hf_length','waveform_hf_data',
+                                       'waveform_lf_t0','waveform_lf_dt','waveform_lf_length','waveform_lf_data']) 
   if CalOrBkg.find("cal"):
     evttype = 3
   else:
@@ -218,7 +209,7 @@ def event_building(data_frame,testmode,CalOrBkg):
     #pick only the same event number and sort it by time
     subset_frame = data_frame.loc[(data_frame.fEventID == data_frame.fEventID[index])].sort_values(by=['fStepsfT']).reset_index(drop=True)
     #set time to 0 , not so necesary
-    subset_frame['fStepsfT'] = subset_frame['fStepsfT'] - min(subset_frame['fStepsfT'].values)
+    subset_frame['fStepsfT'] = subset_frame['fStepsfT'] - min(subset_frame['fStepsfT'].to_numpy())
     
     output_frame = output_frame.append(makeEvents(subset_frame,output_frame,evttype), ignore_index=True) #attach the individual Events to the total output list
     pbar.update(subset_frame.shape[0])   
@@ -230,7 +221,11 @@ def event_building(data_frame,testmode,CalOrBkg):
     if(index >= data_frame.shape[0]):
       break
 
-   
+  #get the cumulatative lengths as needed for the output format
+  output_frame['waveform_hf_length'] = output_frame.waveform_hf_length.cumsum()
+  output_frame['waveform_lf_length'] = output_frame.waveform_lf_length.cumsum()
+
+
   return output_frame
 
 ##########################################################################################################
@@ -238,9 +233,15 @@ def makeEvents(stepList,outFrame,COrB):
   Event_frame = pd.DataFrame().reindex_like(outFrame).dropna() #copy the structure of the outputframe in an empty EVENT frame
 
   ######paramter of the wf / Event building
-  dtime = 150000 # 160 us as in GERDA - 10us offset
-  daqclock = 10  #10 daqticks
-
+  
+  daqparameter = {
+    'daq_hf_clock'   : 10,    #10 ns daqticks
+    'daq_hf_t0'      : 76420, #where wf starts
+    'daq_hf_length'  : 1000,  #10 daqticks
+    'daq_lf_clock'   : 40,    #10 ns daqticks
+    'daq_lf_t0'      : 0,     #where wf starts
+    'daq_lf_length'  : 4000}  #10 daqticks
+  dtime = daqparameter['daq_lf_length']*daqparameter['daq_lf_clock']/2 # 160 us as in GERDA, signal in the middle
   
   time = 0
   index = 0
@@ -256,20 +257,23 @@ def makeEvents(stepList,outFrame,COrB):
     while True:
       detector = subset_frame['fStepsfPhysVolName'][index2]
       eventno = subset_frame['fEventID'][index2]
-      eventtime = subset_frame['fStepsfT'][index2]
-      timer = datetime.datetime.utcnow().timestamp()
-      #print("----",detector,"-",eventno," ", timer )  
+      unixtime = subset_frame['fStepsfT'][index2]
+      eventtime = int(unixtime / 1E9) #ns to s
+      eventtimedec = unixtime - eventtime*1E9
+      unixtime = unixtime / 1E9 #bring it to s for same format
+
+      #print("----",detector,"-",index," ",index2, " ",n)  
       #this frame is all the steps of one detector within the timewindow
       one_det_frame = subset_frame.loc[subset_frame.fStepsfPhysVolName == detector].reset_index(drop=True)
-
-      eventenergy = one_det_frame['fStepsfEdep'].sum()
+      wf_hf, wf_lf = makeWaveform(one_det_frame,daqparameter)
+      eventenergy = one_det_frame['fStepsfEdep'].sum() * 1000 #MeV to keV
       index2 += one_det_frame.shape[0]   
       
       #here we add the data for each event to the panda ferame of this detector at this time in this event
       Event_frame = Event_frame.append({'ch':detector,
-                                        'daqclk':daqclock,
+                                        'daqclk':eventtime,
                                         'daqevtno':eventno,
-                                        'decimal_timestamp':eventtime,
+                                        'decimal_timestamp':eventtimedec,
                                         'evtno':n,
                                         'evttype':COrB,
                                         'inverted':0,
@@ -277,7 +281,15 @@ def makeEvents(stepList,outFrame,COrB):
                                         'muveto_sample':0,
                                         'psa_energy':eventenergy,
                                         'trigno':n,
-                                        'unixtime':timer
+                                        'unixtime':unixtime,
+                                        'waveform_hf_t0':daqparameter['daq_hf_t0'],
+                                        'waveform_hf_dt':daqparameter['daq_hf_clock'],
+                                        'waveform_hf_length':daqparameter['daq_hf_length'],
+                                        'waveform_hf_data':wf_hf,
+                                        'waveform_lf_t0':daqparameter['daq_lf_t0'],
+                                        'waveform_lf_dt':daqparameter['daq_lf_clock'],
+                                        'waveform_lf_length':daqparameter['daq_lf_length'],
+                                        'waveform_lf_data':wf_lf
                                         }
                                         ,ignore_index=True)
 
@@ -296,10 +308,73 @@ def makeEvents(stepList,outFrame,COrB):
   
   return Event_frame
 ##########################################################################################################
-def makeWaveform(stepFrame, daqclock, ):
+def makeWaveform(stepFrame, daqpar):
+  #replace the global time with the travel time in the detector
+  stepFrame['fStepsfT'] = stepFrame.apply(distance, axis=1)
+  signalstarttime = daqpar['daq_lf_length']*daqpar['daq_lf_clock']/2
   
-  return 
+  print(stepFrame['fStepsfT'])
 
+  
+  wf1 = np.zeros(daqpar['daq_hf_length'])
+  
+  wf2 = np.zeros(daqpar['daq_lf_length'])
+  
+  
+  return wf1,wf2
+##########################################################################################################
+def distance(x):
+  #distance in mm , speed ~0.05 mm/ns
+  return (np.sqrt( x['fStepsfLocalX']**2 + x['fStepsfLocalY']**2 + (x['fStepsfLocalZ']+40)**2 ) / 0.05 )
+
+##########################################################################################################
+##########################################################################################################
+def writeDataToFile(outFile,outputframe,testmode):
+   # write pandas frame in a hdf 5 file (! outsource to a new function)
+  f = h5py.File(outFile, "w")
+
+  for column in outputframe:
+    datatype = 'int64'
+    if column.find('waveform_lf') >= 0:
+      if column.find('data') > 0:  
+        outputname = 'daqdata/waveform_lf/values/flattened_data'
+      elif column.find('length') > 0:
+        outputname = 'daqdata/waveform_lf/values/cumulative_length'
+      else:
+        outputname = 'daqdata/waveform_lf/' + column[12:]
+
+    elif column.find('waveform_hf') >= 0:
+      if column.find('data') > 0:  
+        outputname = 'daqdata/waveform_hf/values/flattened_data'
+      elif column.find('length') > 0:
+        outputname = 'daqdata/waveform_hf/values/cumulative_length'
+      else:
+        outputname = 'daqdata/waveform_hf/' + column[12:]
+
+    else:
+      outputname = 'daqdata/' + column
+      if column.find('psa_energy') >= 0:
+        datatype='float64'
+      elif column.find('unixtime') >= 0:
+        datatype='float64'
+      
+    
+    
+    #flatten the wf to data, doesnt do anything to the other columns since they are already
+    dataset = outputframe.explode(column).reset_index(drop=True)[column].astype(datatype).to_numpy()
+    #dataset = outputframe.explode(column)[column].to_numpy()  
+    #dataset = np.arange(len(dataset))
+    if testmode:
+      print("----------")
+      print(column, " ",outputname," ",len(dataset)," ", dataset.shape, " ",datatype)
+      print(dataset)
+
+
+    f.create_dataset(outputname,data=dataset)
+
+  f.create_dataset('daqdata/index',data=outputframe.index)
+  f.close() 
+  return
 
 ##########################################################################################################
 ##########################################################################################################
