@@ -211,7 +211,7 @@ def event_building(data_frame,testmode,CalOrBkg):
     #set time to 0 , not so necesary
     subset_frame['fStepsfT'] = subset_frame['fStepsfT'] - min(subset_frame['fStepsfT'].to_numpy())
     
-    output_frame = output_frame.append(makeEvents(subset_frame,output_frame,evttype), ignore_index=True) #attach the individual Events to the total output list
+    output_frame = output_frame.append(makeEvents(subset_frame,output_frame,evttype,testmode), ignore_index=True) #attach the individual Events to the total output list
     pbar.update(subset_frame.shape[0])   
     
     index += subset_frame.shape[0]    
@@ -229,7 +229,7 @@ def event_building(data_frame,testmode,CalOrBkg):
   return output_frame
 
 ##########################################################################################################
-def makeEvents(stepList,outFrame,COrB): 
+def makeEvents(stepList,outFrame,COrB,testmode): 
   Event_frame = pd.DataFrame().reindex_like(outFrame).dropna() #copy the structure of the outputframe in an empty EVENT frame
 
   ######paramter of the wf / Event building
@@ -265,7 +265,14 @@ def makeEvents(stepList,outFrame,COrB):
       #print("----",detector,"-",index," ",index2, " ",n)  
       #this frame is all the steps of one detector within the timewindow
       one_det_frame = subset_frame.loc[subset_frame.fStepsfPhysVolName == detector].reset_index(drop=True)
-      wf_hf, wf_lf = makeWaveform(one_det_frame,daqparameter)
+      wf_hf_x, wf_lf_x, wf_hf_y, wf_lf_y = makeWaveform(one_det_frame,daqparameter)
+      if(testmode):
+        plt.plot(wf_lf_x,wf_lf_y,"r+")
+        plt.plot(wf_lf_x,wf_lf_y,"r")        
+        plt.plot(wf_hf_x,wf_hf_y,"go")
+        plt.plot(wf_hf_x,wf_hf_y,"g")
+        plt.show()
+
       eventenergy = one_det_frame['fStepsfEdep'].sum() * 1000 #MeV to keV
       index2 += one_det_frame.shape[0]   
       
@@ -285,11 +292,11 @@ def makeEvents(stepList,outFrame,COrB):
                                         'waveform_hf_t0':daqparameter['daq_hf_t0'],
                                         'waveform_hf_dt':daqparameter['daq_hf_clock'],
                                         'waveform_hf_length':daqparameter['daq_hf_length'],
-                                        'waveform_hf_data':wf_hf,
+                                        'waveform_hf_data':wf_hf_y,
                                         'waveform_lf_t0':daqparameter['daq_lf_t0'],
                                         'waveform_lf_dt':daqparameter['daq_lf_clock'],
                                         'waveform_lf_length':daqparameter['daq_lf_length'],
-                                        'waveform_lf_data':wf_lf
+                                        'waveform_lf_data':wf_lf_y
                                         }
                                         ,ignore_index=True)
 
@@ -305,39 +312,73 @@ def makeEvents(stepList,outFrame,COrB):
       break 
     #update time if not at the end of list   
     time = stepList['fStepsfT'][index] #set time to the next event outside the coincidence window (time sorted array)
-  
+
+    
   return Event_frame
 ##########################################################################################################
+# this is just a very ! simple  proxy, the distance from the point contact is used to 
+# calculate wit a constant drift speed a time when the charges occur,
+# no dead layer, cahrge trapping and so on
+# once the charges occur, a constant decay time is set 
+# replace this function (ro the waveform_dummy ! )with a more dedicated model ! 
 def makeWaveform(stepFrame, daqpar):
+  
   #replace the global time with the travel time in the detector
-  stepFrame['fStepsfT'] = stepFrame.apply(distance, axis=1)
-  signalstarttime = daqpar['daq_lf_length']*daqpar['daq_lf_clock']/2
+  stepFrame['fStepsfdrift'] = stepFrame.apply(distance, axis=1)
+  stepFrame['fStepsfdrift'] = stepFrame['fStepsfdrift'] - min(stepFrame['fStepsfdrift'].to_numpy())
+  #print(stepFrame)
   
-  print(stepFrame['fStepsfT'])
+  signalstarttime = daqpar['daq_lf_length']*daqpar['daq_lf_clock']/2  
 
+  #create the time array and an empty array
+  wftime1 = np.arange(daqpar['daq_hf_t0'],daqpar['daq_hf_t0']+daqpar['daq_hf_length']*daqpar['daq_hf_clock'],daqpar['daq_hf_clock'])
+  wf1 = np.zeros(daqpar['daq_hf_length'])  
   
-  wf1 = np.zeros(daqpar['daq_hf_length'])
-  
+  #create the time array and an empty array
+  wftime2 = np.arange(daqpar['daq_lf_t0'],daqpar['daq_lf_t0']+daqpar['daq_lf_length']*daqpar['daq_lf_clock'],daqpar['daq_lf_clock'])
   wf2 = np.zeros(daqpar['daq_lf_length'])
+
+  #go over all energy depostions
+  wf1 = np.sum(list(map(lambda t,e : waveform_dummy(wftime1,signalstarttime+t,e), 
+                        stepFrame['fStepsfdrift'].to_numpy(),stepFrame['fStepsfEdep'].to_numpy())),
+               axis=0)
+  wf2 = np.sum(list(map(lambda t,e : waveform_dummy(wftime2,signalstarttime+t,e), 
+                        stepFrame['fStepsfdrift'].to_numpy(),stepFrame['fStepsfEdep'].to_numpy())),
+               axis=0)               
+   
+  #plt.plot(wftime2,wf2,"r")    
+  #plt.plot(wftime1,wf1,"g")
+  #plt.show()
   
-  
-  return wf1,wf2
+  return wftime1, wftime2, wf1,wf2 #hf, lf
 ##########################################################################################################
 def distance(x):
-  #distance in mm , speed ~0.05 mm/ns
-  return (np.sqrt( x['fStepsfLocalX']**2 + x['fStepsfLocalY']**2 + (x['fStepsfLocalZ']+40)**2 ) / 0.05 )
+  #distance in mm , speed ~0.02 mm/ns
+  return (np.sqrt( x['fStepsfLocalX']**2 + x['fStepsfLocalY']**2 + (x['fStepsfLocalZ']+40)**2 ) / 0.02 )
+
+
+##########################################################################################################
+def waveform_dummy(t,tstart,energy):
+
+    decayconstant = 0.693/70000 #decayconstant of signal in us
+    tt = np.where(t<tstart)[0][-1]
+    vout1 = np.zeros(tt+1)
+    vout2 = np.where(t[tt+1:] > 0,energy*np.exp(-(t[tt+1:]-tstart)*decayconstant),0)
+    vout = np.append(vout1,vout2)
+    return vout
 
 ##########################################################################################################
 ##########################################################################################################
 def writeDataToFile(outFile,outputframe,testmode):
    # write pandas frame in a hdf 5 file (! outsource to a new function)
-  f = h5py.File(outFile, "w")
+  f = h5py.File(outFile, "w") 
 
   for column in outputframe:
     datatype = 'int64'
     if column.find('waveform_lf') >= 0:
       if column.find('data') > 0:  
         outputname = 'daqdata/waveform_lf/values/flattened_data'
+        datatype='float64'
       elif column.find('length') > 0:
         outputname = 'daqdata/waveform_lf/values/cumulative_length'
       else:
@@ -346,6 +387,7 @@ def writeDataToFile(outFile,outputframe,testmode):
     elif column.find('waveform_hf') >= 0:
       if column.find('data') > 0:  
         outputname = 'daqdata/waveform_hf/values/flattened_data'
+        datatype='float64'
       elif column.find('length') > 0:
         outputname = 'daqdata/waveform_hf/values/cumulative_length'
       else:
@@ -374,6 +416,8 @@ def writeDataToFile(outFile,outputframe,testmode):
 
   f.create_dataset('daqdata/index',data=outputframe.index)
   f.close() 
+  #np.set_printoptions(threshold=np.inf)
+#  print(dataset[0:4000])
   return
 
 ##########################################################################################################

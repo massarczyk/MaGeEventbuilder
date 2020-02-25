@@ -44,7 +44,6 @@ waveform:
 
 
 thing to do:
-- check datatypes (int)
 - compression
 - implement deadlayer 
 - implement siggen library readout
