@@ -1,6 +1,8 @@
  ### Version history
  # 02/2020 created R. Massarczyk (massarczyk@lanl.gov)
 
+call:
+python openSimulation.py test.root . -type cal 
 
   # for monte Carlo
   # - it the timestamp the time of the trigger or minus the baselineoffset (10us) ?
