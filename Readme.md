@@ -46,6 +46,7 @@ waveform:
 
 
 thing to do:
+- chuncksize and max files size 
 - compression
 - implement deadlayer 
 - implement siggen library readout

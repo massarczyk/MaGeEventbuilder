@@ -28,8 +28,8 @@ for i in range(len(members)):
 
 print("-----------")
 dset = f['daqdata/daqevtno']
-dset2 = f['daqdata/waveform_lf/values/flattened_data']
-dset3 = f['daqdata/waveform_lf/values/cumulative_length']
+dset2 = f['daqdata/waveform_hf/values/flattened_data']
+dset3 = f['daqdata/waveform_hf/values/cumulative_length']
 for (i, j,k) in zip(dset[0:10],dset2,dset3):
 	print(i," ",j," ",k)
 print(len(dset), " ", len(dset2))

@@ -14,6 +14,7 @@ import uproot
 import argparse
 import matplotlib.pyplot as plt
 import itertools
+import psutil
 
 ##########################################################################################################
 # main function
@@ -67,7 +68,7 @@ def uproot_file(in_file,testmode):
   tt_start = 2 #2
   tt_stop =  tt.numentries-2
   if testmode:
-    tt_stop = min(18,tt.numentries-2)
+    tt_stop = min(5,tt.numentries-2)
 
     
   #empty data frame
@@ -372,7 +373,10 @@ def waveform_dummy(t,tstart,energy):
 def writeDataToFile(outFile,outputframe,testmode):
    # write pandas frame in a hdf 5 file (! outsource to a new function)
   f = h5py.File(outFile, "w") 
+    
+  outputframe.info(memory_usage='deep')
 
+    
   for column in outputframe:
     datatype = 'int64'
     if column.find('waveform_lf') >= 0:
@@ -401,18 +405,20 @@ def writeDataToFile(outFile,outputframe,testmode):
         datatype='float64'
       
     
-    
     #flatten the wf to data, doesnt do anything to the other columns since they are already
-    dataset = outputframe.explode(column).reset_index(drop=True)[column].astype(datatype).to_numpy()
+    #important just explode the column needed otherwise ram goes crazy
+    dataset = outputframe[column].explode().reset_index(drop=True).astype(datatype).to_numpy()
     #dataset = outputframe.explode(column)[column].to_numpy()  
     #dataset = np.arange(len(dataset))
     if testmode:
       print("----------")
       print(column, " ",outputname," ",len(dataset)," ", dataset.shape, " ",datatype)
-      print(dataset)
+      #print(dataset)
 
 
-    f.create_dataset(outputname,data=dataset)
+
+    d = f.create_dataset(outputname,data=dataset,chunks=True)
+    
 
   f.create_dataset('daqdata/index',data=outputframe.index)
   f.close() 
